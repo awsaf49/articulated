@@ -56,7 +56,8 @@ data/
 
 # Videos/media
 *.mp4
-*.gif
+# Root-level gifs (copies live in assets/)
+/arm_animation*.gif
 
 # Secrets
 .env
@@ -64,3 +65,10 @@ data/
 
 # Reference implementations (project leads only)
 reference_*.py
+
+# Large files (PDFs, papers)
+proposal.pdf
+ref_papers/
+AGENTS.md
+CLAUDE.md
+.*cache/
