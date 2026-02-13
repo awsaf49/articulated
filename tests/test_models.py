@@ -1,13 +1,14 @@
 """Tests for model architectures."""
 
+import gymnasium as gym
 import pytest
 import torch
-import gymnasium as gym
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import VecEnv, VecNormalize
 
 from articulated.estimation.model import GRU, LSTM, RNN, StateEstimationModel
+from articulated.rl import train as rl_train
 from articulated.rl.agent import RLAgent
 
 ORIG_GYM_MAKE = gym.make
@@ -197,3 +198,63 @@ class TestRLAgent:
         assert "mean_length" in metrics
 
         agent.env.close()
+
+
+class TestRLTrain:
+    """Tests for the RL training entrypoint."""
+
+    def test_train_passes_top_level_seed_to_agent(self, monkeypatch):
+        captured: dict = {}
+
+        class DummyAgent:
+            def __init__(self, **kwargs):
+                captured["agent_kwargs"] = kwargs
+
+            def setup(self):
+                return None
+
+            def train(self, **kwargs):
+                captured["train_kwargs"] = kwargs
+                return {"total_timesteps": kwargs.get("total_timesteps", 0)}
+
+            def evaluate(self, n_episodes=20):
+                captured["n_episodes"] = n_episodes
+                return {"mean_reward": 0.0, "std_reward": 0.0, "mean_length": 50.0}
+
+        monkeypatch.setattr(rl_train, "RLAgent", DummyAgent)
+
+        cfg = {
+            "seed": 42,
+            "agent": {"algorithm": "ppo"},
+            "training": {"total_timesteps": 1000, "eval_freq": 100, "save_path": "x"},
+        }
+        rl_train.train(cfg)
+
+        assert captured["agent_kwargs"]["seed"] == 42
+
+    def test_train_prefers_agent_seed_over_top_level_seed(self, monkeypatch):
+        captured: dict = {}
+
+        class DummyAgent:
+            def __init__(self, **kwargs):
+                captured["agent_kwargs"] = kwargs
+
+            def setup(self):
+                return None
+
+            def train(self, **kwargs):
+                return {"total_timesteps": kwargs.get("total_timesteps", 0)}
+
+            def evaluate(self, n_episodes=20):
+                return {"mean_reward": 0.0, "std_reward": 0.0, "mean_length": 50.0}
+
+        monkeypatch.setattr(rl_train, "RLAgent", DummyAgent)
+
+        cfg = {
+            "seed": 42,
+            "agent": {"algorithm": "ppo", "seed": 7},
+            "training": {},
+        }
+        rl_train.train(cfg)
+
+        assert captured["agent_kwargs"]["seed"] == 7
