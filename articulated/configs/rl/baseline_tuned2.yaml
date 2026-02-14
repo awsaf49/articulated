@@ -1,0 +1,22 @@
+# Team RL: Baseline configuration (raw observations, tuned PPO v2)
+# Usage: python -m articulated.rl.train --config articulated/configs/rl/baseline_tuned2.yaml
+
+seed: 42
+
+agent:
+  algorithm: "ppo"
+  use_embedding: false
+  learning_rate: 2e-4
+  n_steps: 4096
+  batch_size: 128
+  clip_range: 0.2
+  device: "cpu"
+  tensorboard_log: "logs/rl"
+  normalize_observations: true
+  normalize_rewards: false
+  clip_obs: 10.0
+
+training:
+  total_timesteps: 500000
+  eval_freq: 50000
+  save_path: "checkpoints/rl/baseline_ppo_tuned2"

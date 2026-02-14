@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import gymnasium as gym
 import numpy as np
+import torch
 
 
 class ReacherWithEmbedding(gym.Wrapper):
@@ -91,7 +92,38 @@ class ReacherWithEmbedding(gym.Wrapper):
         Returns:
             Embedded observation.
         """
-        raise NotImplementedError("Embedding observation not yet implemented")
+        if self.embedding_model is None:
+            raise ValueError("Embedding model is required when use_embedding is True.")
+
+        angular_velocities = self._extract_angular_velocities(raw_obs)
+        angular_velocities = angular_velocities.astype(np.float32, copy=False)
+        self._obs_history.append(angular_velocities)
+
+        if len(self._obs_history) > self.history_length:
+            self._obs_history = self._obs_history[-self.history_length :]
+
+        vel_dim = angular_velocities.shape[0]
+        if len(self._obs_history) < self.history_length:
+            pad = np.zeros(
+                (self.history_length - len(self._obs_history), vel_dim),
+                dtype=np.float32,
+            )
+            history = np.vstack([pad, np.stack(self._obs_history)])
+        else:
+            history = np.stack(self._obs_history)
+
+        history_tensor = torch.from_numpy(history).unsqueeze(0)
+        if hasattr(self.embedding_model, "parameters"):
+            try:
+                device = next(self.embedding_model.parameters()).device
+                history_tensor = history_tensor.to(device)
+            except StopIteration:
+                pass
+
+        with torch.no_grad():
+            embedding = self.embedding_model.get_embedding(history_tensor)
+
+        return embedding.squeeze(0).detach().cpu().numpy().astype(np.float32, copy=False)
 
     def _extract_angular_velocities(self, obs: np.ndarray) -> np.ndarray:
         """Extract angular velocities from Reacher observation.
@@ -105,4 +137,8 @@ class ReacherWithEmbedding(gym.Wrapper):
         Returns:
             Angular velocities.
         """
-        raise NotImplementedError("Angular velocity extraction not yet implemented")
+        if obs.shape[0] < 8:
+            raise ValueError(
+                "Expected Reacher-v5 observation with at least 8 elements."
+            )
+        return np.asarray(obs[6:8], dtype=np.float32)
