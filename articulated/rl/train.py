@@ -24,7 +24,9 @@ def load_config(config_path: str) -> dict:
 def train(config: dict) -> None:
     """Train an RL agent."""
     # Initialize agent
-    agent_config = config.get("agent", {})
+    agent_config = dict(config.get("agent", {}))
+    if "seed" in config and "seed" not in agent_config:
+        agent_config["seed"] = config["seed"]
     agent = RLAgent(**agent_config)
 
     # Setup

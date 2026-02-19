@@ -66,9 +66,6 @@ data/
 # Reference implementations (project leads only)
 reference_*.py
 
-# Large files (PDFs, papers)
-proposal.pdf
-ref_papers/
+# Local docs
 AGENTS.md
-CLAUDE.md
-.*cache/
+UCSB_BodyStateManifold.pdf

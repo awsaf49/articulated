@@ -164,14 +164,32 @@ hidden_states = model.get_hidden_states(velocity_trajectory)
 2. Implement `_extract_angular_velocities()` in environment wrapper
 3. Run baseline (raw obs) vs embedded experiments
 
+**Reacher-v5 observation space (Gymnasium 1.2.3 / MuJoCo 3.4.0):**
+- `observation_space`: `Box(-inf, inf, (10,), float64)`
+- `action_space`: `Box(-1.0, 1.0, (2,), float32)`
+- Observation vector layout (indices):
+  - `0:2` -> `cos(theta1), cos(theta2)`
+  - `2:4` -> `sin(theta1), sin(theta2)`
+  - `4:6` -> target position in plane (`qpos[2:4]`)
+  - `6:8` -> joint angular velocities (`qvel[0:2]`)
+  - `8:10` -> fingertip-to-target vector (x, y)
+
 **Run training:**
 ```bash
 # Baseline (raw observations)
 python -m articulated.rl.train --config articulated/configs/rl/baseline.yaml
 
+# Tuned baselines (more steps, normalization, TensorBoard logging)
+python -m articulated.rl.train --config articulated/configs/rl/baseline_tuned.yaml
+python -m articulated.rl.train --config articulated/configs/rl/baseline_tuned2.yaml
+
 # With embeddings (requires trained estimation model)
 python -m articulated.rl.train --config articulated/configs/rl/embedded.yaml
 ```
+
+**Team RL logging & visualization:**
+- TensorBoard: set `tensorboard_log` in config and run `tensorboard --logdir logs/rl`
+- Render a policy: `python -m articulated.rl.render --checkpoint <path>.zip --out logs/rl/reacher.mp4`
 
 **Resources:**
 - [Gymnasium Reacher-v5](https://gymnasium.farama.org/environments/mujoco/reacher/)
@@ -210,6 +228,3 @@ Geometric Intelligence Lab @ UCSB
 - **Team Estimation:** Awsaf Rahman (lead), Siheng Wang
 - **Team Interpretation:** Rohan Koshy, Siheng Wang
 - **Team RL:** Pushpita Joardar, Hun Tae Kim
-
-
-
