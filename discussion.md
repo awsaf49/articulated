@@ -169,9 +169,67 @@ embedding = model.get_embedding(velocities)  # (batch, 256)
 hidden = model.get_hidden_states(velocities)  # (batch, seq_len, 256)
 ```
 
+## SO(2) × SO(2): Restricting to the Torus
+
+### Motivation
+
+The SO(3) analysis above uses PCA and t-SNE to visualize 256-dim hidden states in 2D. This is lossy — a neuron could have clean grid-like structure in the full space that looks like noise after projection. We can't plot neuron activation vs. true configuration because the config space is 6D.
+
+**Solution:** Restrict the arm to a plane. Each joint rotates in SO(2) (a circle), so the configuration space is SO(2) × SO(2) = a torus, parameterized by two angles (θ1, θ2). This is 2D — we can plot neuron activation directly on the (θ1, θ2) grid with zero information loss.
+
+### What Changed
+
+| | SO(3) × SO(3) | SO(2) × SO(2) |
+|---|---|---|
+| Config space | 6D (two 3D rotations) | 2D (two angles on [0, 2π)) |
+| Velocity input | 6D per timestep | 2D per timestep |
+| Integration | Exponential map on SO(3) | θ += ω·dt mod 2π |
+| Place cell distance | Geodesic on rotation group | Circular: min(\|δθ\|, 2π - \|δθ\|) |
+| Init position encoding | Place cell activation (64D) | Raw angles as (cos θ1, sin θ1, cos θ2, sin θ2) → 4D |
+| Visualization | PCA/t-SNE (lossy) | Direct (θ1, θ2) heatmaps (lossless) |
+
+The place cell targets still use the vMF kernel (`κ·cos(d)` + softmax), 32 cells per joint, same as SO(3). The key difference for init position: instead of encoding the starting pose as a 64-dim place cell distribution, we encode it as a 4-dim vector `(cos θ1, sin θ1, cos θ2, sin θ2)` fed through `Linear(4, 256)` → h0.
+
+### Training Results
+
+GRU on SO(2)×SO(2): hidden=256, dropout=0.5, 100k training trajectories, cosine annealing LR. Training stopped at epoch 111/200.
+
+| Epoch | Val Accuracy | Val Loss |
+|-------|-------------|----------|
+| 0     | 75.7%       | 0.0123   |
+| 10    | 87.5%       | 0.0027   |
+| 30    | 94.0%       | 0.0006   |
+| 60    | 95.5%       | 0.0004   |
+| 110   | 96.9%       | 0.0003   |
+
+**Best: 97.3% accuracy, loss 0.000311** (epoch 108).
+
+Compared to SO(3) GRU (97.8% after 200 epochs), SO(2) converges faster to comparable accuracy. This makes sense — the problem is simpler (2D vs 6D manifold, 2D vs 6D velocity input).
+
+### Representation Analysis
+
+![GRU SO(2) Representation Analysis](assets/results/gru_so2_representation_analysis.png)
+
+**PCA:** The hidden representation is low-dimensional — a small number of PCs capture most of the variance. The PC1 vs PC2 projections colored by θ1 and θ2 show smooth gradients, confirming the network encodes joint angles in its top principal components.
+
+**Torus heatmaps:** The key result. Each heatmap shows a single neuron's mean activation across the (θ1, θ2) configuration space. θ1-selective neurons show vertical stripes (responding to θ1 regardless of θ2), and θ2-selective neurons show horizontal stripes. This is direct evidence that individual neurons develop **angle-selective tuning** — they've learned to represent specific joint angles.
+
+### Commands
+
+```bash
+# Generate SO(2) data
+python scripts/generate_data.py --manifold so2 --n_train 100000 --n_val 5000 --workers 16
+
+# Train
+bash scripts/train.sh gru 0 so2
+
+# Analyze
+PYTHONPATH=. python scripts/analyze_representation.py logs/estimation/gru_so2/checkpoints/last.ckpt --manifold so2
+```
+
 ## Next Steps
 
-- **Try GRU/LSTM** — May produce sharper representations than vanilla RNN
-- **Longer training** — Banino et al. trained significantly longer; 200 epochs may not be enough for global structure
-- **Regularization sweep** — Vary dropout, weight decay
-- **Look for grid-like patterns** — Fourier analysis of hidden states, spatial autocorrelation on SO(3)
+- **Longer SO(2) training** — We stopped at 111 epochs; running to 200 may improve further
+- **Look for grid-like patterns** — Fourier analysis of hidden states, spatial autocorrelation on the torus
+- **Regularization sweep** — Vary dropout, weight decay to see effect on representation structure
+- **Compare SO(2) vs SO(3) representations** — Are SO(3) neurons also angle-selective, just harder to visualize?

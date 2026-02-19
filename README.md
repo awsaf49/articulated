@@ -15,7 +15,11 @@ Note: The ECE594 project is currently limited in scope to "Aim 1" above.
 
 ## Overview
 
-This project investigates whether state-estimation objectives for articulated bodies induce structured neural representations analogous to grid codes in spatial navigation. We train recurrent networks on path integration for a robotic arm with configuration space Q = SO(3) × SO(3), analyze the learned representations, and evaluate their utility for downstream reinforcement learning.
+This project investigates whether state-estimation objectives for articulated bodies induce structured neural representations analogous to grid codes in spatial navigation. We train recurrent networks on path integration for a robotic arm and analyze the learned representations.
+
+**Configuration spaces:**
+- **SO(3) × SO(3)** — full 3D rotational joints (6D velocities)
+- **SO(2) × SO(2)** — planar arm on the torus (2D velocities). Neuron activations are directly plottable on (θ1, θ2) without dimensionality reduction
 
 **Project Stages:**
 1. **Body-state estimation** (Team Estimation): Train RNN to perform path integration on joint angular velocities
@@ -76,7 +80,7 @@ articulated/
 │   │   └── train.py         # Training script
 │   │
 │   ├── shared/              # Shared utilities
-│   │   └── robot_arm.py     # Kinematics on SO(3) × SO(3)
+│   │   └── robot_arm.py     # Kinematics on SO(3)×SO(3) and SO(2)×SO(2)
 │   │
 │   ├── configs/             # Configuration files
 │   │   ├── estimation/      # Team Estimation configs
@@ -95,21 +99,34 @@ articulated/
 
 ### Team Estimation
 
-**Goal:** Train RNN to perform path integration on SO(3) × SO(3).
+**Goal:** Train RNN/LSTM/GRU to perform path integration. Supports SO(3)×SO(3) and SO(2)×SO(2).
 
 **Key files:**
-- `articulated/estimation/datamodule.py`: Implement trajectory generation (inputs,targets)
-- `articulated/estimation/model.py`: Define RNN architecture
-- `articulated/estimation/train.py`: Training script
+- `articulated/estimation/datamodule.py`: Trajectory data generation (supports `manifold="so2"` / `"so3"`)
+- `articulated/estimation/model.py`: RNN/LSTM/GRU architectures with configurable `init_pos_size`
+- `scripts/generate_data.py`: Parallel data generation with multiprocessing
+- `scripts/train.py`: Training entry point
+- `scripts/train.sh`: Convenience shell script
+- `scripts/analyze_representation.py`: PCA, t-SNE, and tuning curve / torus heatmap analysis
 
-**Key TODOs:**
-1. Implement proper SO(3) × SO(3) trajectory generation in `_generate_single_trajectory()`
-2. Implement proper "place cell" targets on SO(3) × SO(3)
-3. Experiment with RNN vs LSTM vs GRU architectures
-
-**Run training:**
+**Generate data and train:**
 ```bash
-python -m articulated.estimation.train --config articulated/configs/estimation/rnn.yaml
+# SO(2) — planar arm on the torus
+python scripts/generate_data.py --manifold so2 --n_train 100000 --n_val 5000 --workers 16
+bash scripts/train.sh gru 0 so2
+
+# SO(3) — full 3D rotational joints
+python scripts/generate_data.py --n_train 100000 --n_val 5000 --workers 16
+bash scripts/train.sh gru 0
+```
+
+**Analyze representations:**
+```bash
+# SO(2): direct (θ1, θ2) heatmaps
+PYTHONPATH=. python scripts/analyze_representation.py path/to/checkpoint.ckpt --manifold so2
+
+# SO(3): PCA + t-SNE + tuning curves
+PYTHONPATH=. python scripts/analyze_representation.py path/to/checkpoint.ckpt
 ```
 
 **Interface with other teams:**
