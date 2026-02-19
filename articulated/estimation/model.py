@@ -180,6 +180,7 @@ class StateEstimationModel(L.LightningModule):
         weight_decay: float = 0.0,
         use_init_pos: bool = True,
         dropout: float = 0.0,
+        init_pos_size: Optional[int] = None,
     ):
         """Initialize the Lightning module.
 
@@ -192,6 +193,9 @@ class StateEstimationModel(L.LightningModule):
             weight_decay: Weight decay for optimizer.
             use_init_pos: Whether to encode initial position into h0.
             dropout: Dropout rate on RNN output (0.5 recommended per Banino 2018).
+            init_pos_size: Dimension of initial position input. If None, defaults
+                to output_size (SO(3) place cell activations). Set to 4 for SO(2)
+                where init is (cos θ1, sin θ1, cos θ2, sin θ2).
         """
         super().__init__()
         self.save_hyperparameters()
@@ -202,6 +206,7 @@ class StateEstimationModel(L.LightningModule):
         self.weight_decay = weight_decay
         self.use_init_pos = use_init_pos
         self.model_type = model_type
+        self.init_pos_size = init_pos_size if init_pos_size is not None else output_size
 
         # Instantiate the appropriate model
         self.model: Union[RNN, LSTM, GRU]
@@ -220,7 +225,7 @@ class StateEstimationModel(L.LightningModule):
 
         # Encoder for initial position → initial hidden state
         if use_init_pos:
-            self.init_encoder = nn.Linear(output_size, hidden_size)
+            self.init_encoder = nn.Linear(self.init_pos_size, hidden_size)
 
         self.loss_fn = nn.KLDivLoss(reduction="batchmean")
 
@@ -234,18 +239,20 @@ class StateEstimationModel(L.LightningModule):
         """Forward pass through the model."""
         return self.model(x, hidden)
 
-    def _encode_init_pos(self, init_pc: torch.Tensor) -> Any:
-        """Encode initial place cell activations into initial hidden state.
+    def _encode_init_pos(self, init_pos: torch.Tensor) -> Any:
+        """Encode initial position into initial hidden state.
 
         Args:
-            init_pc: Initial place cell activations of shape (batch, output_size).
+            init_pos: Initial position of shape (batch, init_pos_size).
+                For SO(3): place cell activations (batch, output_size).
+                For SO(2): (cos θ1, sin θ1, cos θ2, sin θ2) → (batch, 4).
 
         Returns:
             Initial hidden state of shape (1, batch, hidden_size) for RNN/GRU,
             or tuple of (h0, c0) each (1, batch, hidden_size) for LSTM.
         """
-        # (batch, output_size) → (batch, hidden_size)
-        h0 = self.init_encoder(init_pc)
+        # (batch, init_pos_size) → (batch, hidden_size)
+        h0 = self.init_encoder(init_pos)
         # RNN expects (num_layers, batch, hidden_size)
         h0 = h0.unsqueeze(0)
 

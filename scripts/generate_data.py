@@ -1,12 +1,13 @@
 """Pre-generate trajectory data for state estimation training.
 
-Generates training and validation trajectories on SO(3) x SO(3) and saves
-them to a .pt file for fast, reproducible loading during training.
+Generates training and validation trajectories on SO(3)xSO(3) or SO(2)xSO(2)
+and saves them to a .pt file for fast, reproducible loading during training.
 
 Uses multiprocessing for ~10-20x speedup on multi-core machines.
 
 Usage:
     python scripts/generate_data.py
+    python scripts/generate_data.py --manifold so2
     python scripts/generate_data.py --n_train 100000 --n_val 5000
     python scripts/generate_data.py --workers 32
     python scripts/generate_data.py --help
@@ -22,13 +23,15 @@ import torch
 from scipy.spatial.transform import Rotation
 from tqdm import tqdm
 
-from articulated.shared.robot_arm import RobotArmKinematics
+from articulated.shared.robot_arm import RobotArm2DKinematics, RobotArmKinematics
+
+# ── SO(3) worker functions ───────────────────────────────────────────────────
 
 
-def _worker_init(
+def _worker_init_so3(
     pc_quats1, pc_quats2, place_cell_kappa, seq_length, dt, vel_sigma, vel_theta
 ):
-    """Initialize worker process with shared place cell centers."""
+    """Initialize worker process with shared place cell centers (SO(3))."""
     global _w_centers_R1, _w_centers_R2, _w_kappa, _w_seq_length, _w_dt
     global _w_vel_sigma, _w_vel_theta, _w_kinematics
     _w_centers_R1 = Rotation.from_quat(pc_quats1)
@@ -41,13 +44,13 @@ def _worker_init(
     _w_kinematics = RobotArmKinematics()
 
 
-def _generate_one(seed):
-    """Generate a single trajectory in a worker process."""
+def _generate_one_so3(seed):
+    """Generate a single SO(3) trajectory in a worker process."""
     rng = np.random.default_rng(seed)
     config = _w_kinematics.sample_random_configuration(rng)
 
     # Initial place cell activation
-    init_pc = _compute_pc(config)
+    init_pc = _compute_pc_so3(config)
 
     n_total = len(_w_centers_R1) + len(_w_centers_R2)
     decay = np.exp(-_w_vel_theta * _w_dt)
@@ -61,13 +64,13 @@ def _generate_one(seed):
         omega = decay * omega + noise_scale * rng.standard_normal(6)
         velocities[t] = omega
         config = _w_kinematics.integrate_velocity(config, omega, _w_dt)
-        targets[t] = _compute_pc(config)
+        targets[t] = _compute_pc_so3(config)
 
     return velocities, targets, init_pc
 
 
-def _compute_pc(config):
-    """Compute place cell activations using vMF kernel, separate per joint."""
+def _compute_pc_so3(config):
+    """Compute place cell activations using vMF kernel, separate per joint (SO(3))."""
     R1_cur, R2_cur = config
     kappa = _w_kappa
 
@@ -88,11 +91,93 @@ def _compute_pc(config):
     return np.concatenate([pc1, pc2])
 
 
+# ── SO(2) worker functions ───────────────────────────────────────────────────
+
+
+def _worker_init_so2(
+    pc_angles1, pc_angles2, place_cell_kappa, seq_length, dt, vel_sigma, vel_theta
+):
+    """Initialize worker process with shared place cell centers (SO(2))."""
+    global _w_centers_a1, _w_centers_a2, _w_kappa, _w_seq_length, _w_dt
+    global _w_vel_sigma, _w_vel_theta, _w_kinematics
+    _w_centers_a1 = pc_angles1
+    _w_centers_a2 = pc_angles2
+    _w_kappa = place_cell_kappa
+    _w_seq_length = seq_length
+    _w_dt = dt
+    _w_vel_sigma = vel_sigma
+    _w_vel_theta = vel_theta
+    _w_kinematics = RobotArm2DKinematics()
+
+
+def _generate_one_so2(seed):
+    """Generate a single SO(2) trajectory in a worker process."""
+    rng = np.random.default_rng(seed)
+    config = _w_kinematics.sample_random_configuration(rng)
+
+    # Initial position as (cos θ1, sin θ1, cos θ2, sin θ2)
+    theta1, theta2 = config
+    init_angles = np.array(
+        [
+            np.cos(theta1),
+            np.sin(theta1),
+            np.cos(theta2),
+            np.sin(theta2),
+        ]
+    )
+
+    n_total = len(_w_centers_a1) + len(_w_centers_a2)
+    decay = np.exp(-_w_vel_theta * _w_dt)
+    noise_scale = _w_vel_sigma * np.sqrt(1.0 - decay**2)
+
+    velocities = np.zeros((_w_seq_length, 2))
+    targets = np.zeros((_w_seq_length, n_total))
+    omega = np.zeros(2)
+
+    for t in range(_w_seq_length):
+        omega = decay * omega + noise_scale * rng.standard_normal(2)
+        velocities[t] = omega
+        config = _w_kinematics.integrate_velocity(config, omega, _w_dt)
+        targets[t] = _compute_pc_so2(config)
+
+    return velocities, targets, init_angles
+
+
+def _compute_pc_so2(config):
+    """Compute place cell activations using vMF kernel, separate per joint (SO(2))."""
+    theta1, theta2 = config
+    kappa = _w_kappa
+    TWO_PI = 2.0 * np.pi
+
+    # Circular distance per joint
+    delta1 = np.abs(theta1 - _w_centers_a1)
+    d1 = np.minimum(delta1, TWO_PI - delta1)
+    delta2 = np.abs(theta2 - _w_centers_a2)
+    d2 = np.minimum(delta2, TWO_PI - delta2)
+
+    # vMF kernel + softmax per joint
+    logits1 = kappa * np.cos(d1)
+    logits1 -= logits1.max()
+    exp1 = np.exp(logits1)
+    pc1 = exp1 / exp1.sum()
+
+    logits2 = kappa * np.cos(d2)
+    logits2 -= logits2.max()
+    exp2 = np.exp(logits2)
+    pc2 = exp2 / exp2.sum()
+
+    return np.concatenate([pc1, pc2])
+
+
+# ── Common parallel generation ───────────────────────────────────────────────
+
+
 def generate_parallel(
     n_trajectories,
     base_seed,
-    pc_quats1,
-    pc_quats2,
+    manifold,
+    pc_data1,
+    pc_data2,
     place_cell_kappa,
     seq_length,
     n_place_cells,
@@ -102,17 +187,26 @@ def generate_parallel(
     n_workers,
 ):
     """Generate trajectories using multiprocessing."""
-    # Each trajectory gets a unique seed derived from base_seed
     rng = np.random.default_rng(base_seed)
     seeds = rng.integers(0, 2**31, size=n_trajectories)
 
-    velocities = np.zeros((n_trajectories, seq_length, 6))
+    vel_dim = 2 if manifold == "so2" else 6
+    init_dim = 4 if manifold == "so2" else n_place_cells
+
+    velocities = np.zeros((n_trajectories, seq_length, vel_dim))
     targets = np.zeros((n_trajectories, seq_length, n_place_cells))
-    init_pcs = np.zeros((n_trajectories, n_place_cells))
+    init_data = np.zeros((n_trajectories, init_dim))
+
+    if manifold == "so2":
+        initializer = _worker_init_so2
+        worker_fn = _generate_one_so2
+    else:
+        initializer = _worker_init_so3
+        worker_fn = _generate_one_so3
 
     initargs = (
-        pc_quats1,
-        pc_quats2,
+        pc_data1,
+        pc_data2,
         place_cell_kappa,
         seq_length,
         dt,
@@ -120,21 +214,28 @@ def generate_parallel(
         vel_theta,
     )
 
-    with Pool(n_workers, initializer=_worker_init, initargs=initargs) as pool:
-        results = pool.imap(_generate_one, seeds, chunksize=64)
-        for i, (vel, tgt, ipc) in enumerate(
+    with Pool(n_workers, initializer=initializer, initargs=initargs) as pool:
+        results = pool.imap(worker_fn, seeds, chunksize=64)
+        for i, (vel, tgt, init) in enumerate(
             tqdm(results, total=n_trajectories, desc="Generating trajectories")
         ):
             velocities[i] = vel
             targets[i] = tgt
-            init_pcs[i] = ipc
+            init_data[i] = init
 
-    return velocities, targets, init_pcs
+    return velocities, targets, init_data
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Pre-generate trajectory data")
 
+    parser.add_argument(
+        "--manifold",
+        type=str,
+        default="so3",
+        choices=["so3", "so2"],
+        help="Configuration manifold: so3 (6D) or so2 (2D torus)",
+    )
     parser.add_argument(
         "--n_train", type=int, default=100000, help="Training trajectories"
     )
@@ -162,8 +263,8 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=str,
-        default="data/estimation/trajectories.pt",
-        help="Output .pt file path",
+        default=None,
+        help="Output .pt file path (default: auto based on manifold)",
     )
 
     return parser.parse_args()
@@ -172,27 +273,46 @@ def parse_args():
 def main():
     args = parse_args()
 
+    if args.output is None:
+        if args.manifold == "so2":
+            args.output = "data/estimation/trajectories_so2.pt"
+        else:
+            args.output = "data/estimation/trajectories.pt"
+
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_per_joint = args.n_place_cells // 2
-    print(f"Generating {args.n_train} train + {args.n_val} val trajectories")
+    print(
+        f"Generating {args.n_train} train + {args.n_val} val trajectories ({args.manifold})"
+    )
     print(
         f"  seq_length={args.seq_length}, n_place_cells={args.n_place_cells} ({n_per_joint} per joint)"
     )
     print(f"  kappa={args.place_cell_kappa}, seed={args.seed}, workers={args.workers}")
     print()
 
-    # Initialize separate place cells for each joint
     rng = np.random.default_rng(args.seed)
-    centers_R1 = Rotation.random(n_per_joint, random_state=int(rng.integers(0, 2**31)))
-    centers_R2 = Rotation.random(n_per_joint, random_state=int(rng.integers(0, 2**31)))
-    pc_quats1 = centers_R1.as_quat()
-    pc_quats2 = centers_R2.as_quat()
+
+    if args.manifold == "so2":
+        # Random angles on [0, 2*pi) for each joint
+        pc_data1 = rng.uniform(0, 2 * np.pi, size=n_per_joint)
+        pc_data2 = rng.uniform(0, 2 * np.pi, size=n_per_joint)
+    else:
+        # Random rotations on SO(3) for each joint
+        centers_R1 = Rotation.random(
+            n_per_joint, random_state=int(rng.integers(0, 2**31))
+        )
+        centers_R2 = Rotation.random(
+            n_per_joint, random_state=int(rng.integers(0, 2**31))
+        )
+        pc_data1 = centers_R1.as_quat()
+        pc_data2 = centers_R2.as_quat()
 
     common = dict(
-        pc_quats1=pc_quats1,
-        pc_quats2=pc_quats2,
+        manifold=args.manifold,
+        pc_data1=pc_data1,
+        pc_data2=pc_data2,
         place_cell_kappa=args.place_cell_kappa,
         seq_length=args.seq_length,
         n_place_cells=args.n_place_cells,
@@ -227,13 +347,10 @@ def main():
     data = {
         "train_velocities": torch.from_numpy(train_vel).float(),
         "train_targets": torch.from_numpy(train_tgt).float(),
-        "train_init_pcs": torch.from_numpy(train_init).float(),
         "val_velocities": torch.from_numpy(val_vel).float(),
         "val_targets": torch.from_numpy(val_tgt).float(),
-        "val_init_pcs": torch.from_numpy(val_init).float(),
-        "place_cell_quats1": torch.from_numpy(pc_quats1).float(),
-        "place_cell_quats2": torch.from_numpy(pc_quats2).float(),
         "metadata": {
+            "manifold": args.manifold,
             "n_train": args.n_train,
             "n_val": args.n_val,
             "seq_length": args.seq_length,
@@ -244,6 +361,17 @@ def main():
             "seed": args.seed,
         },
     }
+
+    if args.manifold == "so2":
+        data["train_init_angles"] = torch.from_numpy(train_init).float()
+        data["val_init_angles"] = torch.from_numpy(val_init).float()
+        data["place_cell_angles1"] = torch.from_numpy(pc_data1).float()
+        data["place_cell_angles2"] = torch.from_numpy(pc_data2).float()
+    else:
+        data["train_init_pcs"] = torch.from_numpy(train_init).float()
+        data["val_init_pcs"] = torch.from_numpy(val_init).float()
+        data["place_cell_quats1"] = torch.from_numpy(pc_data1).float()
+        data["place_cell_quats2"] = torch.from_numpy(pc_data2).float()
 
     print(f"\nSaving to {output_path}...")
     torch.save(data, output_path)

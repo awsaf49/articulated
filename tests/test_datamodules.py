@@ -211,3 +211,138 @@ class TestEstimationDataModule:
 
         assert dm.place_cell_centers is not None
         assert len(dm.place_cell_centers) == 8  # n_cells_per_joint
+
+
+class TestEstimationDataModuleSO2:
+    """Tests for EstimationDataModule with SO(2) manifold."""
+
+    def test_initialization(self):
+        """Test that SO(2) data module initializes correctly."""
+        dm = EstimationDataModule(
+            batch_size=16,
+            seq_length=50,
+            n_trajectories_train=100,
+            n_trajectories_val=20,
+            n_place_cells=64,
+            seed=42,
+            manifold="so2",
+        )
+        assert dm.manifold == "so2"
+        assert dm.vel_dim == 2
+        assert dm.init_pos_dim == 4
+
+    def test_dataset_shapes(self):
+        """Velocity shape should be (*, 2), init_pos shape should be (*, 4)."""
+        seq_len = 10
+        n_train = 5
+        n_val = 2
+        n_pc = 8
+
+        dm = EstimationDataModule(
+            batch_size=4,
+            seq_length=seq_len,
+            n_trajectories_train=n_train,
+            n_trajectories_val=n_val,
+            n_place_cells=n_pc,
+            seed=42,
+            provide_init_pos=True,
+            manifold="so2",
+        )
+        dm.setup(stage="fit")
+
+        assert dm.train_dataset is not None
+        train_vel, train_tgt, train_init = dm.train_dataset.tensors
+        assert train_vel.shape == (n_train, seq_len, 2)
+        assert train_tgt.shape == (n_train, seq_len, n_pc)
+        assert train_init.shape == (n_train, 4)
+
+        assert dm.val_dataset is not None
+        val_vel, val_tgt, val_init = dm.val_dataset.tensors
+        assert val_vel.shape == (n_val, seq_len, 2)
+        assert val_tgt.shape == (n_val, seq_len, n_pc)
+        assert val_init.shape == (n_val, 4)
+
+    def test_init_pos_is_unit_vectors(self):
+        """Init pos (cos, sin) pairs should have magnitude ~1."""
+        dm = EstimationDataModule(
+            batch_size=4,
+            seq_length=10,
+            n_trajectories_train=5,
+            n_trajectories_val=2,
+            n_place_cells=8,
+            seed=42,
+            provide_init_pos=True,
+            manifold="so2",
+        )
+        dm.setup(stage="fit")
+
+        assert dm.train_dataset is not None
+        init_pos = dm.train_dataset.tensors[2].numpy()
+        # (cos θ1, sin θ1) should have magnitude 1
+        mag1 = np.sqrt(init_pos[:, 0] ** 2 + init_pos[:, 1] ** 2)
+        mag2 = np.sqrt(init_pos[:, 2] ** 2 + init_pos[:, 3] ** 2)
+        np.testing.assert_allclose(mag1, 1.0, atol=1e-5)
+        np.testing.assert_allclose(mag2, 1.0, atol=1e-5)
+
+    def test_per_joint_targets_are_distributions(self):
+        """Each joint's place cell targets should sum to ~1."""
+        n_pc = 16
+        n_per_joint = n_pc // 2
+        dm = EstimationDataModule(
+            batch_size=4,
+            seq_length=10,
+            n_trajectories_train=3,
+            n_trajectories_val=1,
+            n_place_cells=n_pc,
+            seed=42,
+            manifold="so2",
+        )
+        dm.setup(stage="fit")
+
+        assert dm.train_dataset is not None
+        targets = dm.train_dataset.tensors[1]
+        j1_sums = targets[..., :n_per_joint].sum(dim=-1).numpy()
+        j2_sums = targets[..., n_per_joint:].sum(dim=-1).numpy()
+        np.testing.assert_allclose(j1_sums, 1.0, atol=1e-5)
+        np.testing.assert_allclose(j2_sums, 1.0, atol=1e-5)
+
+    def test_targets_not_uniform(self):
+        """vMF targets should NOT be uniform."""
+        n_pc = 16
+        n_per_joint = n_pc // 2
+        dm = EstimationDataModule(
+            batch_size=4,
+            seq_length=10,
+            n_trajectories_train=3,
+            n_trajectories_val=1,
+            n_place_cells=n_pc,
+            place_cell_kappa=5.0,
+            seed=42,
+            manifold="so2",
+        )
+        dm.setup(stage="fit")
+
+        assert dm.train_dataset is not None
+        targets = dm.train_dataset.tensors[1]
+        j1 = targets[0, 0, :n_per_joint].numpy()
+        assert j1.max() > 2.0 / n_per_joint
+
+    def test_place_cells_initialized(self):
+        """Place cell centers should be angles after setup."""
+        dm = EstimationDataModule(
+            batch_size=4,
+            seq_length=10,
+            n_trajectories_train=3,
+            n_trajectories_val=1,
+            n_place_cells=16,
+            seed=42,
+            manifold="so2",
+        )
+        dm.setup(stage="fit")
+
+        assert dm.place_cell_centers is not None
+        assert len(dm.place_cell_centers) == 8
+        # Each center should be a pair of floats (angles)
+        theta1, theta2 = dm.place_cell_centers[0]
+        assert isinstance(theta1, (float, np.floating))
+        assert isinstance(theta2, (float, np.floating))

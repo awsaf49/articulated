@@ -64,6 +64,22 @@ def parse_args():
     parser.add_argument(
         "--weight_decay", type=float, default=1e-4, help="L2 regularization"
     )
+    parser.add_argument(
+        "--input_size", type=int, default=None, help="Input size (auto from manifold)"
+    )
+    parser.add_argument(
+        "--init_pos_size",
+        type=int,
+        default=None,
+        help="Init position size (auto from manifold)",
+    )
+    parser.add_argument(
+        "--manifold",
+        type=str,
+        default="so3",
+        choices=["so3", "so2"],
+        help="Configuration manifold",
+    )
 
     # Training
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
@@ -108,8 +124,22 @@ def main():
     except ValueError:
         devices = args.devices
 
+    # Derive input_size and init_pos_size from manifold if not specified
+    if args.input_size is None:
+        input_size = 2 if args.manifold == "so2" else 6
+    else:
+        input_size = args.input_size
+
+    if args.init_pos_size is None:
+        init_pos_size = 4 if args.manifold == "so2" else args.n_place_cells
+    else:
+        init_pos_size = args.init_pos_size
+
     print(
         f"Model:     {args.model_type.upper()}, hidden={args.hidden_size}, dropout={args.dropout}"
+    )
+    print(
+        f"Manifold:  {args.manifold} (input_size={input_size}, init_pos_size={init_pos_size})"
     )
     print(
         f"Training:  {args.epochs} epochs, lr={args.lr}, wd={args.weight_decay}, grad_clip={args.grad_clip}"
@@ -123,7 +153,7 @@ def main():
         print(
             f"Data:      generating {args.n_train} train, {args.n_val} val, seq_len={args.seq_length}"
         )
-    print(f"Logging:   {'WandB' if args.wandb else 'TensorBoard + CSV'}")
+    print(f"Logging:   {'WandB' if args.wandb else 'CSV'}")
     print(f"Output:    {output_dir}")
     print()
 
@@ -139,11 +169,12 @@ def main():
         provide_init_pos=True,
         data_path=args.data_path,
         num_workers=args.num_workers,
+        manifold=args.manifold,
     )
 
     # Model
     model = StateEstimationModel(
-        input_size=6,
+        input_size=input_size,
         hidden_size=args.hidden_size,
         output_size=args.n_place_cells,
         model_type=args.model_type,
@@ -151,6 +182,7 @@ def main():
         weight_decay=args.weight_decay,
         use_init_pos=True,
         dropout=args.dropout,
+        init_pos_size=init_pos_size,
     )
 
     # Loggers

@@ -228,6 +228,53 @@ class TestStateEstimationModel:
 
         assert hidden_states.shape == (4, 20, 128)
 
+    def test_forward_so2_input(self):
+        """Test forward pass with SO(2) input_size=2."""
+        model = StateEstimationModel(
+            input_size=2,
+            hidden_size=128,
+            output_size=64,
+            model_type="gru",
+            use_init_pos=False,
+        )
+
+        x = torch.randn(4, 20, 2)
+        output, hidden_states = model(x)
+
+        assert output.shape == (4, 20, 64)
+        assert hidden_states.shape == (4, 20, 128)
+
+    def test_forward_so2_with_init_pos(self):
+        """Test SO(2) model with init_pos_size=4."""
+        model = StateEstimationModel(
+            input_size=2,
+            hidden_size=128,
+            output_size=64,
+            model_type="gru",
+            use_init_pos=True,
+            init_pos_size=4,
+        )
+
+        x = torch.randn(4, 20, 2)
+        # SO(2) init pos: (cos θ1, sin θ1, cos θ2, sin θ2) → 4D
+        init_pos = torch.randn(4, 4)
+        h0 = model._encode_init_pos(init_pos)
+        output, hidden_states = model(x, hidden=h0)
+
+        assert output.shape == (4, 20, 64)
+        assert hidden_states.shape == (4, 20, 128)
+
+    def test_init_pos_size_defaults_to_output_size(self):
+        """When init_pos_size is None, it should default to output_size."""
+        model = StateEstimationModel(
+            input_size=6,
+            hidden_size=128,
+            output_size=64,
+            model_type="rnn",
+            use_init_pos=True,
+        )
+        assert model.init_pos_size == 64
+
 
 @pytest.mark.usefixtures("patch_reacher_env")
 class TestRLAgent:

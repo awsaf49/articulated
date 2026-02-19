@@ -2,13 +2,14 @@
 # Train state estimation model
 #
 # Usage:
-#   bash scripts/train.sh gru 0          # train GRU on GPU 0
+#   bash scripts/train.sh gru 0          # train GRU on GPU 0 (SO(3))
+#   bash scripts/train.sh gru 0 so2      # train GRU on GPU 0 (SO(2))
 #   bash scripts/train.sh lstm 0,1       # train LSTM on GPU 0 and 1
 #   bash scripts/train.sh rnn 2,3,4      # train RNN on GPU 2, 3, 4
 #   bash scripts/train.sh gru all        # train GRU on all GPUs
 #
 # Defaults:
-#   - Data: data/estimation/trajectories.pt
+#   - Data: data/estimation/trajectories.pt (or trajectories_so2.pt)
 #   - WandB logging enabled
 #   - 200 epochs, batch_size=128, lr=1e-3, dropout=0.5
 #   - Gradient clipping=1.0, CosineAnnealing LR schedule
@@ -18,9 +19,9 @@ set -euo pipefail
 # ── Args ──────────────────────────────────────────────────────────────────────
 MODEL_TYPE="${1:-gru}"
 GPUS="${2:-0}"
+MANIFOLD="${3:-so3}"
 
 # ── Config (edit these as needed) ─────────────────────────────────────────────
-DATA_PATH="data/estimation/trajectories.pt"
 EPOCHS=200
 BATCH_SIZE=128
 LR=1e-3
@@ -31,7 +32,19 @@ WEIGHT_DECAY=1e-4
 GRAD_CLIP=1.0
 SEED=42
 WANDB_PROJECT="articulated-estimation"
-OUTPUT_DIR="logs/estimation/${MODEL_TYPE}"
+
+# Manifold-dependent config
+if [ "$MANIFOLD" = "so2" ]; then
+    DATA_PATH="data/estimation/trajectories_so2.pt"
+    INPUT_SIZE=2
+    INIT_POS_SIZE=4
+    OUTPUT_DIR="logs/estimation/${MODEL_TYPE}_so2"
+else
+    DATA_PATH="data/estimation/trajectories.pt"
+    INPUT_SIZE=6
+    INIT_POS_SIZE=$N_PLACE_CELLS
+    OUTPUT_DIR="logs/estimation/${MODEL_TYPE}"
+fi
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,6 +77,7 @@ echo "============================================"
 echo "  State Estimation Training"
 echo "============================================"
 echo "Model:      ${MODEL_TYPE^^} (hidden=${HIDDEN_SIZE}, dropout=${DROPOUT})"
+echo "Manifold:   ${MANIFOLD} (input=${INPUT_SIZE}, init_pos=${INIT_POS_SIZE})"
 echo "Data:       ${DATA_PATH}"
 echo "GPUs:       ${GPUS} (devices=${NUM_DEVICES}, strategy=${STRATEGY})"
 echo "Training:   ${EPOCHS} epochs, lr=${LR}, batch=${BATCH_SIZE}"
@@ -89,5 +103,8 @@ exec "$PYTHON" "$SCRIPT_DIR/train.py" \
     --strategy "$STRATEGY" \
     --seed "$SEED" \
     --output_dir "$OUTPUT_DIR" \
+    --manifold "$MANIFOLD" \
+    --input_size "$INPUT_SIZE" \
+    --init_pos_size "$INIT_POS_SIZE" \
     --wandb \
     --project "$WANDB_PROJECT"
